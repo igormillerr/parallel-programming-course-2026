@@ -13,7 +13,7 @@ public class DefaultMetricsCollector implements MetricsCollector {
     private long max = Long.MIN_VALUE;
 
     @Override
-    public void record(long value) {
+    public synchronized void record(long value) {
         int bucket = (int) Math.min(value / 4, 255);
         buckets[bucket]++;
 
@@ -24,7 +24,7 @@ public class DefaultMetricsCollector implements MetricsCollector {
     }
 
     @Override
-    public Snapshot snapshot() {
+    public synchronized Snapshot snapshot() {
         long[] bucketsReplica = buckets.clone();
         long countReplica = count;
         long sumReplica = sum;

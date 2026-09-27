@@ -1,77 +1,54 @@
 package com.miller;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 public class DefaultMetricsCollector implements MetricsCollector {
 
-    private final long[] buckets = new long[256];
+    private final List<ThreadState> allStates = new ArrayList<>();
 
-    private final Object[] locks = createLocks();
-
-    private final AtomicLong count = new AtomicLong(0);
-
-    private final AtomicLong sum = new AtomicLong(0);
-
-    private final AtomicLong min = new AtomicLong(Long.MAX_VALUE);
-
-    private final AtomicLong max = new AtomicLong(Long.MIN_VALUE);
+    private final Object listLock = new Object();
 
     @Override
     public void record(long value) {
+        ThreadState state = myState.get();
         int bucket = (int) Math.min(value / 4, 255);
-        int stripe = bucket % 16;
-        synchronized (locks[stripe]) {
-            buckets[bucket]++;
-        }
 
-        count.getAndIncrement();
-        sum.getAndAdd(value);
-        long current;
-        do {
-            current = min.get();
-            if (value >= current) {
-                break;
-            }
-        } while (!min.compareAndSet(current, value));
+        state.buckets.setRelease(bucket, state.buckets.getPlain(bucket) + 1);
+        state.count.setRelease(state.count.getPlain() + 1);
+        state.sum.setRelease(state.sum.getPlain() + value);
 
-        do {
-            current = max.get();
-            if (value <= current) {
-                break;
-            }
-        } while (!max.compareAndSet(current, value));
+        if (value < state.min.getPlain()) state.min.setRelease(value);
+        if (value > state.max.getPlain()) state.max.setRelease(value);
     }
 
     @Override
     public Snapshot snapshot() {
-        long[] bucketsReplica = new long[256];
-        for (int i = 0; i < 16; i++) {
-            synchronized (locks[i]) {
-                for (int j = i; j < 256; j += 16) {
-                    bucketsReplica[j] = buckets[j];
-                }
-            }
+        long[] out = new long[256];
+        long count = 0, sum = 0, min = Long.MAX_VALUE, max = 0;
+        List<ThreadState> copyOfStates;
+        synchronized (listLock) {
+            copyOfStates = new ArrayList<>(allStates);
         }
 
-        long countReplica = count.get();
-        long sumReplica = sum.get();
-        long minReplica = min.get();
-        long maxReplica = max.get();
-        long p50 = cumulative(bucketsReplica, countReplica, 0.5);
-        long p99 = cumulative(bucketsReplica, countReplica, 0.99);
+        for (ThreadState s : copyOfStates) {
+            for (int i = 0; i < 256; i++) {
+                out[i] += s.buckets.get(i);
+            }
+            count += s.count.get();
+            sum += s.sum.get();
+            min = Math.min(min, s.min.get());
+            max = Math.max(max, s.max.get());
+        }
 
-        return new Snapshot(
-                bucketsReplica,
-                countReplica,
-                sumReplica,
-                minReplica,
-                maxReplica,
-                p50,
-                p99
-        );
+        long p50 = computePercentile(out, count, 0.50);
+        long p99 = computePercentile(out, count, 0.99);
+        return new Snapshot(out, count, sum, min, max, p50, p99);
     }
 
-    private long cumulative(long[] buckets, long count, double p) {
+    private long computePercentile(long[] buckets, long count, double p) {
         double limit = count * p;
         long accumulated = 0;
         for (int i = 0; i < 256; i++) {
@@ -83,12 +60,20 @@ public class DefaultMetricsCollector implements MetricsCollector {
         return 0;
     }
 
-    private static Object[] createLocks() {
-        Object[] locks = new Object[16];
-        for (int i = 0; i < locks.length; i++) {
-            locks[i] = new Object();
+    private final ThreadLocal<ThreadState> myState = ThreadLocal.withInitial(() -> {
+        ThreadState s = new ThreadState();
+        synchronized (listLock) {
+            allStates.add(s);
         }
-        return locks;
+        return s;
+    });
+
+    static final class ThreadState {
+        final AtomicLongArray buckets = new AtomicLongArray(256);
+        final AtomicLong count = new AtomicLong();
+        final AtomicLong sum = new AtomicLong();
+        final AtomicLong min = new AtomicLong(Long.MAX_VALUE);
+        final AtomicLong max = new AtomicLong(0);
     }
 
 }

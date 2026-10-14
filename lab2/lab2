@@ -1,0 +1,2 @@
+#!/bin/sh
+exec java -cp "$(dirname "$0")/out" src/main/java/com/miller/Main.java "$@"

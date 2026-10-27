@@ -296,7 +296,7 @@ schedule AAAB -> ok
 - Поток B: `transfer(acc2, acc1)` — захватывает `b`, пауза `window()`, захватывает `a`.
 
 ```bash
-./lab2 transfer first
+java -cp out com.miller.Main transfer first
 ```
 Вывод:
 ```

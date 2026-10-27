@@ -20,12 +20,13 @@ public final class Scheduler {
     private final List<Worker> workers = new ArrayList<>();
     private final Semaphore schedulerSignal = new Semaphore(0);
     private final StringBuilder trace = new StringBuilder();
+    private final List<SchedLock> locks = new ArrayList<>();
+    private volatile boolean aborted = false;
 
-    private static final ThreadLocal<Worker> currentWorker =
-            new ThreadLocal<>();
+    private static final ThreadLocal<Worker> currentWorker = new ThreadLocal<>();
 
     private enum State {
-        NEW, RUNNING, PAUSED, WAITING, DONE
+        NEW, RUNNING, PAUSED, WAITING, WAITING_LOCK, DONE
     }
 
     private final class Worker {
@@ -37,7 +38,7 @@ public final class Scheduler {
         volatile State state = State.NEW;
         BooleanSupplier condition;
         boolean touchedSincePause;
-        Throwable failure;
+        SchedLock waitingLock;
 
         Worker(int id, Runnable body) {
             this.id = id;
@@ -49,7 +50,14 @@ public final class Scheduler {
         }
     }
 
+    private static final class RunAborted extends RuntimeException {
+    }
+
     public Scheduler() {
+    }
+
+    public void registerLock(SchedLock lock) {
+        locks.add(lock);
     }
 
     /** Зарегистрировать поток. Потоки получают буквы A, B, C… в порядке вызова spawn. */
@@ -72,11 +80,8 @@ public final class Scheduler {
 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                worker.failure = e;
-
-            } catch (Throwable e) {
-                worker.failure = e;
-
+            } catch (RunAborted ignored) {
+                Thread.currentThread().interrupt();
             } finally {
                 worker.state = State.DONE;
                 schedulerSignal.release();
@@ -117,6 +122,14 @@ public final class Scheduler {
                         worker.state = State.PAUSED;
                     }
 
+                    if (worker.state == State.WAITING_LOCK && worker.waitingLock != null && worker.waitingLock.isFree()) {
+                        worker.state = State.PAUSED;
+                    }
+
+                    if (worker.state == State.PAUSED && worker.waitingLock != null && !worker.waitingLock.isFree()) {
+                        worker.state = State.WAITING_LOCK;
+                    }
+
                     if (worker.state == State.PAUSED) {
                         enabled.add(worker.id);
                     }
@@ -127,7 +140,9 @@ public final class Scheduler {
                 }
 
                 if (enabled.isEmpty()) {
-                    throw new IllegalStateException("No enabled workers, but some workers are not DONE");
+                    deadlock = heldLocks();
+                    abortWorkers();
+                    break;
                 }
 
                 int next = strategy.pick(enabled, last);
@@ -143,10 +158,6 @@ public final class Scheduler {
                 selected.state = State.RUNNING;
                 selected.permit.release();
                 waitForSignal();
-
-                if (selected.failure != null) {
-                    throw new IllegalStateException("Worker " + (char) ('A' + next) + " failed", selected.failure);
-                }
             }
 
             completed = true;
@@ -242,6 +253,101 @@ public final class Scheduler {
         afterSharedOperation(name, value, "=");
     }
 
+    public int currentWorkerId() {
+        Worker worker = currentWorker.get();
+
+        if (worker == null || worker.getScheduler() != this) {
+            throw new IllegalStateException("Operation outside this Scheduler");
+        }
+
+        return worker.id;
+    }
+
+    public void waitForLock(SchedLock lock) {
+        Worker worker = currentWorker.get();
+
+        if (worker == null || worker.getScheduler() != this) {
+            throw new IllegalStateException("Operation outside this Scheduler");
+        }
+
+        worker.waitingLock = lock;
+        yieldToScheduler(worker, State.WAITING_LOCK);
+        worker.touchedSincePause = false;
+    }
+
+    public void clearWaitingLock() {
+        Worker worker = currentWorker.get();
+
+        if (worker == null || worker.getScheduler() != this) {
+            throw new IllegalStateException("Operation outside this Scheduler");
+        }
+
+        worker.waitingLock = null;
+    }
+
+    public void beforeLockOperation() {
+        beforeSharedOperation();
+    }
+
+    public void afterLockOperation() {
+        Worker worker = currentWorker.get();
+
+        if (worker == null || worker.getScheduler() != this) {
+            throw new IllegalStateException("Lock operation outside this Scheduler");
+        }
+        worker.touchedSincePause = true;
+    }
+
+    public void beforeLockOperation(SchedLock lock) {
+        Worker worker = requireCurrentWorker();
+
+        if (worker.getScheduler() != this) {
+            throw new IllegalStateException("Lock operation outside this Scheduler");
+        }
+
+        worker.waitingLock = lock;
+
+        if (worker.touchedSincePause) {
+            yieldToScheduler(worker, State.PAUSED);
+        } else if (!lock.isFree()) {
+            yieldToScheduler(worker, State.WAITING_LOCK);
+        }
+
+        worker.touchedSincePause = false;
+    }
+
+    private String heldLocks() {
+        StringBuilder result = new StringBuilder("held={");
+        boolean first = true;
+
+        for (SchedLock lock : locks) {
+            if (lock.ownerId == -1) {
+                continue;
+            }
+
+            if (!first) {
+                result.append(", ");
+            }
+
+            result.append(lock.name)
+                    .append(":")
+                    .append((char) ('A' + lock.ownerId));
+            first = false;
+        }
+
+        return result.append("}").toString();
+    }
+
+    private void abortWorkers() {
+        aborted = true;
+
+        for (Worker worker : workers) {
+            if (worker.state != State.DONE) {
+                worker.permit.release();
+            }
+        }
+    }
+
     private static <T> void afterSharedOperation(String name, T value, String operation) {
         Worker worker = requireCurrentWorker();
 
@@ -273,6 +379,9 @@ public final class Scheduler {
 
         try {
             worker.permit.acquire();
+            if (worker.getScheduler().aborted) {
+                throw new RunAborted();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Worker interrupted while waiting for Scheduler", e);

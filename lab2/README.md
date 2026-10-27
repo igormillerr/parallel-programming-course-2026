@@ -409,11 +409,14 @@ first failing: <трасса> -> <ошибка>        # только если �
 ### Задание
 1. Прогоните:
    ```bash
-   ./lab2 withdraw-v1 bounded 0
-   ./lab2 withdraw-v1 bounded 1
-   ./lab2 withdraw-v1 bounded 2
-   ./lab2 transfer bounded 0
-   ./lab2 transfer bounded 1
+    javac -d out src/main/java/com/miller/*.java
+    
+    java -cp out com.miller.Main withdraw-v1 bounded 0
+    java -cp out com.miller.Main withdraw-v1 bounded 1
+    java -cp out com.miller.Main withdraw-v1 bounded 2
+    
+    java -cp out com.miller.Main transfer bounded 0
+    java -cp out com.miller.Main transfer bounded 1
    ```
    Заполните таблицу «Этап 5» в форме отчёта.
 2. Найдите в выводе минимальное K, при котором баг уже виден, для `withdraw-v1` и для `transfer`. Посмотрите первую ошибочную трассу при этом K (`replay <трасса> log`) и отметьте в логе, где именно было вытеснение.
@@ -690,11 +693,13 @@ mode=volatile samples=2,000,000
 #### Этап 5: Bounded
 | Программа     | K | Расписаний | Ошибок | Первая ошибочная трасса | На каком решении вытеснение (для минимального K; нумерация с 1, как в этапе 5) |
 |---------------|---|------------|--------|-------------------------|--------------------------------------------------------------------------------|
-| `withdraw-v1` | 0 |            |        |                         |                                                                                |
-| `withdraw-v1` | 1 |            |        |                         |                                                                                |
-| `withdraw-v1` | 2 |            |        |                         |                                                                                |
-| `transfer`    | 0 |            |        |                         |                                                                                |
-| `transfer`    | 1 |            |        |                         |                                                                                |
+| `withdraw-v1` | 0 | 2          | 0      |                         |                                                                                |
+| `withdraw-v1` | 1 | 8          | 2      | AABBBBAA                | 3                                                                              |
+| `withdraw-v1` | 2 | 12         | 6      | AABBAABB                |                                                                                |
+| `transfer`    | 0 | 2          | 0      |                         |                                                                                |
+| `transfer`    | 1 | 8          | 2      | AB                      | 2                                                                              |
+
+
 
 ### 3. Результаты этапа 6 (Коллектор)
 

@@ -67,30 +67,48 @@ public final class Strategies {
         private final List<Integer> selectedIndices = new java.util.ArrayList<>();
         private int depth;
 
+        private final int bound;
+        private int preemptions;
+
         public Dfs(int bound) {
-            if (bound != Integer.MAX_VALUE) {
-                throw new UnsupportedOperationException("Bounded DFS belongs to stage 5");
+            if (bound < 0) {
+                throw new IllegalArgumentException("bound must be nonnegative");
             }
+
+            this.bound = bound;
         }
 
         /** Подготовиться к новому прогону (позиция в пути, счётчик вытеснений). */
         @Override
         public void beginRun() {
             depth = 0;
+            preemptions = 0;
         }
 
         @Override
         public int pick(List<Integer> enabled, int last) {
+            boolean canPreempt = last >= 0 && enabled.contains(last);
+            List<Integer> options;
+
+            if (canPreempt && preemptions >= bound) {
+                options = List.of(last);
+            } else {
+                options = List.copyOf(enabled);
+            }
+
             if (depth == alternatives.size()) {
-                alternatives.add(List.copyOf(enabled));
+                alternatives.add(options);
                 selectedIndices.add(0);
-            } else if (!alternatives.get(depth).equals(enabled)) {
+
+            } else if (!alternatives.get(depth).equals(options)) {
                 throw new IllegalStateException("Enabled workers differ at decision " + depth);
             }
 
-            int worker = alternatives.get(depth)
-                    .get(selectedIndices.get(depth));
+            int worker = alternatives.get(depth).get(selectedIndices.get(depth));
 
+            if (canPreempt && worker != last) {
+                preemptions++;
+            }
             depth++;
             return worker;
         }

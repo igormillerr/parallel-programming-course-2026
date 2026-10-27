@@ -63,18 +63,62 @@ public final class Strategies {
     /** Stateless DFS по дереву выборов: каждый прогон с нуля, повторяет префикс прошлого и берёт следующий вариант.
      *  bound — максимум вытеснений (этап 5); для dfs runner передаёт Integer.MAX_VALUE. */
     public static final class Dfs implements Strategy {
-        public Dfs(int bound) { }
+        private final List<List<Integer>> alternatives = new java.util.ArrayList<>();
+        private final List<Integer> selectedIndices = new java.util.ArrayList<>();
+        private int depth;
+
+        public Dfs(int bound) {
+            if (bound != Integer.MAX_VALUE) {
+                throw new UnsupportedOperationException("Bounded DFS belongs to stage 5");
+            }
+        }
 
         /** Подготовиться к новому прогону (позиция в пути, счётчик вытеснений). */
-        public void beginRun() { }
+        @Override
+        public void beginRun() {
+            depth = 0;
+        }
 
+        @Override
         public int pick(List<Integer> enabled, int last) {
-            throw new UnsupportedOperationException("TODO этап 4: Dfs.pick");
+            if (depth == alternatives.size()) {
+                alternatives.add(List.copyOf(enabled));
+                selectedIndices.add(0);
+            } else if (!alternatives.get(depth).equals(enabled)) {
+                throw new IllegalStateException("Enabled workers differ at decision " + depth);
+            }
+
+            int worker = alternatives.get(depth)
+                    .get(selectedIndices.get(depth));
+
+            depth++;
+            return worker;
         }
 
         /** Выбрать следующий путь; false — дерево обойдено. */
+        @Override
         public boolean endRun() {
-            throw new UnsupportedOperationException("TODO этап 4: Dfs.endRun");
+            while (alternatives.size() > depth) {
+                alternatives.removeLast();
+                selectedIndices.removeLast();
+            }
+
+            for (int i = depth - 1; i >= 0; i--) {
+                int next = selectedIndices.get(i) + 1;
+
+                if (next < alternatives.get(i).size()) {
+                    selectedIndices.set(i, next);
+
+                    while (alternatives.size() > i + 1) {
+                        alternatives.removeLast();
+                        selectedIndices.removeLast();
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

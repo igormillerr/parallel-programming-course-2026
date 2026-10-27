@@ -48,10 +48,15 @@ public final class Strategies {
 
     /** Случайный поток: enabled.get(rnd.nextInt(enabled.size())), rnd = new java.util.Random(seed). */
     public static final class RandomPick implements Strategy {
-        public RandomPick(long seed) { }
+        private final java.util.Random rnd;
 
+        public RandomPick(long seed) {
+            this.rnd = new java.util.Random(seed);
+        }
+
+        @Override
         public int pick(List<Integer> enabled, int last) {
-            throw new UnsupportedOperationException("TODO этап 3: RandomPick.pick");
+            return enabled.get(rnd.nextInt(enabled.size()));
         }
     }
 

@@ -11,7 +11,7 @@ public final class Strategies {
     /** Всегда первый поток из enabled. */
     public static final class FirstAlive implements Strategy {
         public int pick(List<Integer> enabled, int last) {
-            throw new UnsupportedOperationException("TODO этап 1: FirstAlive.pick");
+            return enabled.getFirst();
         }
     }
 
